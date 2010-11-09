@@ -14,10 +14,11 @@ namespace :db do
             table = []
             table << line.split(/"/)[1]
             has_id = line.split(/,/).detect { |l| /:id => false/ =~ l }
-            table << "id" unless has_id
-          when /t\./
+            table << ["id", "integer"] unless has_id
+          when /t\.(\S+)/
+            type = $1
             column = line.split(/"/)[1]
-            table << column # unless /created_at|updated_at/ =~ column
+            table << [column, type] # unless /created_at|updated_at/ =~ column
           when /  end/
             tables[table.shift] = table unless table.blank?
           end
@@ -28,10 +29,16 @@ namespace :db do
 
       tables.each do |table_name, columns|
         next if ENV["FIXTURES"] && !ENV["FIXTURES"].split(/,/).include?(table_name)
-        order = columns.include?("id") ? " ORDER BY id" : ""
+        order = columns.map(&:first).include?("id") ? " ORDER BY id" : ""
         records = execute_sql(table_name, order)
         next if records.empty?
-        write_fixtures(fixtures_dir + table_name, records, columns) { |record, column, i| entry_fixture(column, record[column]) }
+        write_fixtures(fixtures_dir + table_name, records, columns) do |record, (column, type), i|
+          entry_fixture \
+            column,
+            (type == "binary" && record[column]) \
+              ? "!binary |\n    #{[record[column]].pack('m').gsub(/\n/,"\n    ")}\n" \
+              : record[column]
+        end
       end
     end
 
@@ -142,8 +149,8 @@ def entry_fixture(column, value)
     value.gsub!(/\t|\?/, "")
     value.gsub!(/\[/, "［")
     value.gsub!(/\]/, "］")
-    if value =~ /\n/
-      "  #{column}: |\n    " + value.split("\n").join("\n    ")
+    if value =~ /\n/ && value !~ /^!binary\s*\|\s*\n/
+      "  #{column}: #{$1}|\n    " + value.split("\n").join("\n    ")
     else
       "  #{column}: #{value}"
     end
